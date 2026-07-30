@@ -13,6 +13,6 @@
 ```bash
 pkg update && pkg upgrade
 pkg install python git
-git clone https://github.com/your-username/fb-forgot-tool
+git clone https://github.com/Nurulnc/Forgot.git
 cd fb-forgot-tool
 pip install -r requirements.txt
