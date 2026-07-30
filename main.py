@@ -40,8 +40,6 @@ with open("config.json") as f:
 
 THREADS = config.get("threads", 3)
 TIMEOUT = config.get("timeout", 10)
-USE_PROXY = config.get("use_proxy", False)
-PROXY_FILE = config.get("proxy_file", "proxies.txt")
 ADMIN_ID = config.get("admin_id", "")
 
 # ================= DEVICE APPROVAL =================
@@ -83,14 +81,61 @@ def remove_approved(device_id):
         return True
     return False
 
-# ================= PROXY =================
-def load_proxies():
-    if not os.path.exists(PROXY_FILE):
-        return []
-    with open(PROXY_FILE, "r") as f:
-        return [line.strip() for line in f if line.strip()]
+# ================= PROXY PARSER =================
+def parse_proxy(proxy_str):
+    """
+    Supported formats:
+    - host:port
+    - user:pass@host:port
+    """
+    proxy_str = proxy_str.strip()
+    
+    # Check if auth is present
+    if "@" in proxy_str:
+        auth_part, host_part = proxy_str.split("@", 1)
+        if ":" in auth_part:
+            user, password = auth_part.split(":", 1)
+        else:
+            user, password = auth_part, ""
+        return {
+            "http": f"http://{user}:{password}@{host_part}",
+            "https": f"https://{user}:{password}@{host_part}"
+        }
+    else:
+        return {
+            "http": f"http://{proxy_str}",
+            "https": f"https://{proxy_str}"
+        }
 
-proxies = load_proxies()
+# ================= PROXY INPUT =================
+def get_proxy_list():
+    print(f"{Fore.CYAN}🌐 Proxy Settings")
+    print(f"{Fore.YELLOW}[1] Skip (no proxy)")
+    print(f"{Fore.YELLOW}[2] Enter single proxy (host:port or user:pass@host:port)")
+    print(f"{Fore.YELLOW}[3] Load from proxies.txt (each line: host:port or user:pass@host:port)")
+    choice = input("Select: ").strip()
+    
+    if choice == "1":
+        return []
+    elif choice == "2":
+        proxy = input("Enter proxy: ").strip()
+        if proxy:
+            return [parse_proxy(proxy)]
+        return []
+    elif choice == "3":
+        if os.path.exists("proxies.txt"):
+            with open("proxies.txt", "r") as f:
+                proxies = []
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        proxies.append(parse_proxy(line))
+                return proxies
+        else:
+            print(f"{Fore.RED}❌ proxies.txt not found!")
+            return []
+    else:
+        return []
 
 # ================= CAPTCHA SOLVER =================
 def solve_captcha(site_key, page_url):
@@ -98,11 +143,11 @@ def solve_captcha(site_key, page_url):
     return "MANUAL_CAPTCHA_SOLVED"
 
 # ================= FACEBOOK FORGOT (SMS ONLY) =================
-def forgot_password_sms(phone, proxy=None):
+def forgot_password_sms(phone, proxy_dict=None):
     scraper = cloudscraper.create_scraper()
     
-    if proxy:
-        scraper.proxies = {"http": proxy, "https": proxy}
+    if proxy_dict:
+        scraper.proxies = proxy_dict
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36",
@@ -242,6 +287,12 @@ def main():
         else:
             return
     
+    proxy_list = get_proxy_list()
+    if proxy_list:
+        print(f"{Fore.GREEN}[+] Loaded {len(proxy_list)} proxies")
+    else:
+        print(f"{Fore.YELLOW}[!] No proxy used (direct connection)")
+    
     print(f"{Fore.CYAN}📁 Enter folder path containing .txt files")
     print(f"{Fore.YELLOW}Example: /sdcard/numbers/ or /storage/emulated/0/numbers/")
     folder_path = input("Path: ").strip()
@@ -257,12 +308,6 @@ def main():
         return
     
     print(f"{Fore.GREEN}[+] Loaded {len(numbers)} numbers")
-    
-    proxy_list = []
-    if USE_PROXY and os.path.exists(PROXY_FILE):
-        with open(PROXY_FILE, "r") as f:
-            proxy_list = [line.strip() for line in f if line.strip()]
-        print(f"{Fore.GREEN}[+] Loaded {len(proxy_list)} proxies")
     
     chunk_size = max(1, len(numbers) // THREADS)
     chunks = [numbers[i:i+chunk_size] for i in range(0, len(numbers), chunk_size)]
