@@ -2,7 +2,7 @@
     "threads": 3,
     "timeout": 10,
     "captcha_api": "https://api.capmonster.cloud",
-    "captcha_api_key": "YOUR_API_KEY",
+    "captcha_api_key": "20255f693bb3a8c5230e8fd8fd6ec679",
     "use_proxy": false,
     "proxy_file": "proxies.txt",
     "admin_id": "4778b9a839be6fa9"
